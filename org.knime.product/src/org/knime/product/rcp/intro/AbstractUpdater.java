@@ -51,9 +51,9 @@ package org.knime.product.rcp.intro;
 import java.io.File;
 import java.util.concurrent.locks.ReentrantLock;
 
-import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.widgets.Display;
 import org.knime.core.node.NodeLogger;
+import org.knime.workbench.browser.IntroPageBrowserWrapper;
 
 /**
  * Abstract base class for all updaters (JS) that modify the intro page.
@@ -96,7 +96,7 @@ abstract class AbstractUpdater extends AbstractIntroPageModifier implements Runn
     }
 
     protected void executeUpdateInBrowser(final String jsCall) {
-        Browser browser = findIntroPageBrowser();
+        IntroPageBrowserWrapper browser = findIntroPageBrowser();
         if (browser != null) {
             Display.getDefault().asyncExec(new Runnable() {
                 @Override

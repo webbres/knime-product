@@ -55,6 +55,7 @@ import java.net.URL;
 
 import org.eclipse.core.runtime.AssertionFailedException;
 import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.browser.LocationListener;
 import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IEditorReference;
@@ -66,6 +67,7 @@ import org.eclipse.ui.internal.browser.BrowserViewer;
 import org.eclipse.ui.internal.browser.WebBrowserEditor;
 import org.eclipse.ui.internal.browser.WebBrowserEditorInput;
 import org.knime.core.node.NodeLogger;
+import org.knime.workbench.browser.IntroPageBrowserWrapper;
 
 /**
  *
@@ -102,7 +104,7 @@ public class AbstractIntroPageModifier {
      *
      * @return the browser instance showing the intro page or <code>null</code>
      */
-    protected Browser findIntroPageBrowser() {
+    protected IntroPageBrowserWrapper findIntroPageBrowser() {
         return findIntroPageBrowser(m_introPageFile);
     }
 
@@ -114,7 +116,7 @@ public class AbstractIntroPageModifier {
      * @param introPageFile the temporary intro page file
      * @return the browser instance showing the intro page or <code>null</code>
      */
-    static Browser findIntroPageBrowser(final File introPageFile) {
+    static IntroPageBrowserWrapper findIntroPageBrowser(final File introPageFile) {
         for (IWorkbenchWindow window : PlatformUI.getWorkbench().getWorkbenchWindows()) {
             IWorkbenchPage[] pages = new IWorkbenchPage[0];
             try {
@@ -144,8 +146,34 @@ public class AbstractIntroPageModifier {
 
                                 Field browserField = viewer.getClass().getDeclaredField("browser");
                                 browserField.setAccessible(true);
-                                return (Browser)browserField.get(viewer);
+                                final Browser browser = (Browser)browserField.get(viewer);
+                                return new IntroPageBrowserWrapper() {
+
+                                    @Override
+                                    public boolean execute(final String jsCall) {
+                                        return browser.execute(jsCall);
+                                    }
+
+                                    @Override
+                                    public void refresh() {
+                                        browser.refresh();
+                                    }
+
+                                    @Override
+                                    public void removeLocationListener(final LocationListener l) {
+                                        browser.removeLocationListener(l);
+                                    }
+
+                                    @Override
+                                    public void addLocationListener(final LocationListener l) {
+                                        browser.addLocationListener(l);
+                                    }
+
+                                };
+                            } else if (part instanceof IntroPageBrowserWrapper) {
+                                return (IntroPageBrowserWrapper) part;
                             }
+
                         }
                     } catch (PartInitException ex) {
                         NodeLogger.getLogger(AbstractInjector.class).error(

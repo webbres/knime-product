@@ -68,10 +68,10 @@ import javax.xml.xpath.XPath;
 import javax.xml.xpath.XPathFactory;
 
 import org.eclipse.core.runtime.preferences.IEclipsePreferences;
-import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.widgets.Display;
 import org.knime.core.node.NodeLogger;
 import org.knime.core.util.FileUtil;
+import org.knime.workbench.browser.IntroPageBrowserWrapper;
 import org.w3c.dom.Document;
 
 /**
@@ -141,7 +141,7 @@ abstract class AbstractInjector extends AbstractIntroPageModifier implements Run
     }
 
     private void refreshIntroEditor() {
-        final Browser browser = findIntroPageBrowser();
+        final IntroPageBrowserWrapper browser = findIntroPageBrowser();
         if (browser != null) {
             Display.getDefault().asyncExec(new Runnable() {
                 @Override

@@ -86,7 +86,7 @@ import org.eclipse.jface.preference.IPersistentPreferenceStore;
 import org.eclipse.jface.window.Window;
 import org.eclipse.jface.wizard.IWizardPage;
 import org.eclipse.jface.wizard.WizardDialog;
-import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.LocationEvent;
 import org.eclipse.swt.browser.LocationListener;
 import org.eclipse.swt.program.Program;
@@ -99,13 +99,16 @@ import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PartInitException;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.browser.IWebBrowser;
+import org.eclipse.ui.browser.IWorkbenchBrowserSupport;
 import org.eclipse.ui.ide.IDE;
 import org.eclipse.ui.internal.browser.SystemBrowserInstance;
+import org.eclipse.ui.internal.browser.WorkbenchBrowserSupport;
 import org.knime.core.node.KNIMEConstants;
 import org.knime.core.node.NodeLogger;
 import org.knime.core.util.EclipseUtil;
 import org.knime.core.util.FileUtil;
 import org.knime.product.customizations.ICustomizationService;
+import org.knime.workbench.browser.IntroPageBrowserWrapper;
 import org.knime.workbench.editor2.WorkflowEditor;
 import org.knime.workbench.explorer.ExplorerMountTable;
 import org.knime.workbench.explorer.filesystem.AbstractExplorerFileStore;
@@ -260,7 +263,12 @@ public class IntroPage implements LocationListener {
     public void show() {
         if (m_introFile != null) {
             try {
-                IWebBrowser browser = PlatformUI.getWorkbench().getBrowserSupport().createBrowser(BROWSER_ID);
+                IWorkbenchBrowserSupport browserSupport = PlatformUI.getWorkbench().getBrowserSupport();
+                if (browserSupport instanceof WorkbenchBrowserSupport) {
+                    ((WorkbenchBrowserSupport)browserSupport)
+                        .setDesiredBrowserSupportId("org.knime.workbench.cef.browser");
+                }
+                IWebBrowser browser = browserSupport.createBrowser(SWT.NONE, BROWSER_ID, "Welcome", "TODO");
                 if (browser instanceof SystemBrowserInstance) {
                     showMissingBrowserWarning();
                 } else {
@@ -304,7 +312,7 @@ public class IntroPage implements LocationListener {
      * (unfortunately) involves some heavy reflection stuff as there is no other way to attach a listener otherwise.
      */
     private void attachLocationListener() {
-        Browser browser = AbstractIntroPageModifier.findIntroPageBrowser(m_introFile);
+        IntroPageBrowserWrapper browser = AbstractIntroPageModifier.findIntroPageBrowser(m_introFile);
         if (browser != null) {
             browser.removeLocationListener(this);
             browser.addLocationListener(this);
