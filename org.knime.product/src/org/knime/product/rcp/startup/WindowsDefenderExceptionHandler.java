@@ -150,6 +150,8 @@ public final class WindowsDefenderExceptionHandler {
      * @return true if and only if the dialog was shown
      */
     public boolean checkForAndAddExceptionToWindowsDefender(final String configKey, final Display display) {
+
+
         try {
             final ConfigAreaFlag flag = new ConfigAreaFlag(configKey, m_logger);
 
@@ -266,7 +268,7 @@ public final class WindowsDefenderExceptionHandler {
         final boolean elevated, final String... arguments) {
         try {
             final StringBuilder commandBuilder =
-                new StringBuilder("powershell -inputformat none -outputformat text -NonInteractive -Command ");
+                new StringBuilder("powershell -ErrorAction Stop -inputformat none -outputformat text -NonInteractive -Command ");
             if (elevated) {
                 commandBuilder.append("Start-Process powershell -Verb runAs -ArgumentList "
                     + "`-inputformat,none,`-outputformat,text,`-NonInteractive,`-Command,");
@@ -307,6 +309,7 @@ public final class WindowsDefenderExceptionHandler {
                 final List<String> stderr = stderrGobbler.getOutput();
                 if (timeout) {
                     m_logger.queueError(String.format("PowerShell command %s timed out.", command));
+                    // N.B. The process may still be running, timeout out doesn't terminate the process
                 } else if (process.exitValue() == 0) {
                     return Optional.of(stdoutGobbler.getOutput());
                 } else {
@@ -320,6 +323,13 @@ public final class WindowsDefenderExceptionHandler {
                 if (!stderr.isEmpty()) {
                     m_logger.queueError("Stderr is:");
                     stderr.stream().forEach(m_logger::queueError);
+                }
+
+                // If the process is still running we can't close the streams and will hang at resource cleanup
+                if(process.isAlive()) {
+                    m_logger
+                    .queueError(String.format("PowerShell command %s did not terminate and will be destroyed.", command));
+                    process.destroyForcibly();
                 }
             }
         } catch (IOException e) {
