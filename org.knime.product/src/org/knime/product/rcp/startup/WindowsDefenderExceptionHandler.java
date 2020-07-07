@@ -50,7 +50,6 @@ package org.knime.product.rcp.startup;
 
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -82,43 +81,24 @@ public final class WindowsDefenderExceptionHandler {
 
         private static final String TITLE = "Accelerate Startup of KNIME Analytics Platform";
 
-        private static final String URL = "https://www.knime.com/faq#q38";
-
-        private static final String MESSAGE = "We have detected that your system is running Windows Defender, "
-            + "which is known to substantially slow down the startup of KNIME Analytics Platform. "
-            + "If you are only installing extensions from trusted sources, "
-            + "consider adding an exception to Windows Defender to accelerate your startup. " + "See <a href=\"" + URL
-            + "\">our FAQ</a> for details and instructions on how to do this manually."
-            + "\n\nAlternatively, would you like knime.exe to be automatically registered "
+        private static final String SUMMARY = "Would you like knime.exe to be automatically registered "
             + "as a trusted exception with Windows Defender?";
 
+        private static final String TEXT = "We have detected that your system is running Windows Defender, "
+            + "which is known to substantially slow down the startup of KNIME Analytics Platform. "
+            + "If you are only installing extensions from trusted sources, "
+            + "consider adding an exception to Windows Defender to accelerate your startup.";
+
+        private static final String URL = "https://www.knime.com/faq#q38";
+
+        private static final String LINK = "See <a href=\"" + URL + "\">our FAQ</a> for more details.";
+
+        private static final String TOGGLE_MESSAGE = "Do not ask again";
+
         WindowsDefenderDetectedDialog(final Display display, final DelayedMessageLogger logger) {
-            super(display, TITLE, URL, MESSAGE, logger, MessageDialog.QUESTION,
-                new String[]{IDialogConstants.YES_LABEL, IDialogConstants.NO_LABEL});
-        }
-    }
-
-    /**
-     * A helper class for consuming the output stream of our executed PowerShell commands and providing it as a
-     * {@link List} of {@link String Strings}.
-     */
-    private static final class StreamGobbler implements Runnable {
-
-        private final InputStream m_inputStream;
-
-        private final List<String> m_output = new ArrayList<>();
-
-        StreamGobbler(final InputStream inputStream) {
-            m_inputStream = inputStream;
-        }
-
-        @Override
-        public void run() {
-            new BufferedReader(new InputStreamReader(m_inputStream)).lines().forEach(m_output::add);
-        }
-
-        List<String> getOutput() {
-            return m_output;
+            super(display, logger, MessageDialog.QUESTION,
+                new String[]{IDialogConstants.YES_LABEL, IDialogConstants.NO_LABEL}, TITLE, SUMMARY, TEXT, LINK, URL,
+                TOGGLE_MESSAGE);
         }
     }
 
@@ -166,7 +146,7 @@ public final class WindowsDefenderExceptionHandler {
                 if (dialog.getToggleState()) {
                     flag.setFlag(false);
                 }
-                if (dialog.getReturnCode() == IDialogConstants.YES_ID) {
+                if (dialog.getReturnCode() == 0) {
                     // run the PowerShell command Add-MpPreference elevated to an an exception to Windows Defender
                     addException();
                 }
@@ -193,18 +173,15 @@ public final class WindowsDefenderExceptionHandler {
 
         final Optional<List<String>> antiMalwareServiceEnabled =
             executePowerShellCommand("Get-MpComputerStatus", "AMServiceEnabled", false);
-        final Optional<List<String>> realTimeProtectionEnabled =
-            executePowerShellCommand("Get-MpComputerStatus", "RealTimeProtectionEnabled", false);
-
-        // when an error occurs, assume Windows Defender is disabled
-        if (!antiMalwareServiceEnabled.isPresent() || !realTimeProtectionEnabled.isPresent()) {
+        if (!antiMalwareServiceEnabled.isPresent() || antiMalwareServiceEnabled.get().size() != 1
+            || !Boolean.parseBoolean(antiMalwareServiceEnabled.get().iterator().next())) {
             return false;
         }
 
-        return antiMalwareServiceEnabled.get().size() == 1
-            && Boolean.parseBoolean(antiMalwareServiceEnabled.get().iterator().next())
-            && realTimeProtectionEnabled.get().size() == 1
-            && Boolean.parseBoolean(realTimeProtectionEnabled.get().iterator().next());
+        final Optional<List<String>> realTimeProtectionEnabled =
+            executePowerShellCommand("Get-MpComputerStatus", "RealTimeProtectionEnabled", false);
+        return (realTimeProtectionEnabled.isPresent() && realTimeProtectionEnabled.get().size() == 1
+            && Boolean.parseBoolean(realTimeProtectionEnabled.get().iterator().next()));
     }
 
     /**
@@ -216,16 +193,15 @@ public final class WindowsDefenderExceptionHandler {
 
         final Optional<List<String>> exclusionProcesses =
             executePowerShellCommand("Get-MpPreference", "ExclusionProcess", false);
-        final Optional<List<String>> exclusionPaths =
-            executePowerShellCommand("Get-MpPreference", "ExclusionPath", false);
 
-        // when an error occurred, assume an exception has already been set
-        if (!exclusionProcesses.isPresent() || !exclusionPaths.isPresent()) {
+        if (!exclusionProcesses.isPresent() || exclusionProcesses.get().contains("knime.exe")) {
             return true;
         }
 
+        final Optional<List<String>> exclusionPaths =
+            executePowerShellCommand("Get-MpPreference", "ExclusionPath", false);
         // check if an exception to the knime.exe process has been added
-        if (exclusionProcesses.get().contains("knime.exe")) {
+        if (!exclusionPaths.isPresent()) {
             return true;
         }
 
@@ -246,7 +222,7 @@ public final class WindowsDefenderExceptionHandler {
      * Run the PowerShell command Add-MpPreference elevated to an an exception to Windows Defender.
      */
     private void addException() {
-        executePowerShellCommand("Add-MpPreference", null, true, "`-ExclusionProcess", "knime.exe");
+        executePowerShellCommand("Add-MpPreference", null, true, "-ExclusionProcess", "knime.exe");
     }
 
     /**
@@ -259,78 +235,104 @@ public final class WindowsDefenderExceptionHandler {
      * @param elevated a flag that determines whether to run the command elevated (i.e. with root access, triggering
      *            Windows User Account Control)
      * @param arguments the arguments for the command
-     * @return the output of the PowerShell command or a selected property thereof, if the process terminated
-     *         successfully, otherwise an empty Optional
+     * @return the output of the PowerShell command or a selected property thereof, if the process was not run elevated
+     *         and it terminated successfully, otherwise an empty Optional
      */
     private Optional<List<String>> executePowerShellCommand(final String command, final String selectProperty,
         final boolean elevated, final String... arguments) {
-        try {
-            final StringBuilder commandBuilder =
-                new StringBuilder("powershell -inputformat none -outputformat text -NonInteractive -Command ");
-            if (elevated) {
-                commandBuilder.append("Start-Process powershell -Verb runAs -ArgumentList "
-                    + "`-inputformat,none,`-outputformat,text,`-NonInteractive,`-Command,");
-            }
-            commandBuilder.append(command);
+        final List<String> commands = new ArrayList<>();
+        commands.add("powershell");
+        commands.add("-inputformat");
+        commands.add("none");
+        commands.add("-outputformat");
+        commands.add("text");
+        commands.add("-NonInteractive");
+        commands.add("-Command");
+        if (elevated) {
+            commands.add("Start-Process");
+            commands.add("powershell");
+            commands.add("-Verb");
+            commands.add("runAs");
+            commands.add("-ArgumentList");
+            StringBuilder sb = new StringBuilder();
+            sb.append("`-inputformat,none,`-outputformat,text,`-NonInteractive,`-Command,");
+            sb.append(command);
             if (arguments.length > 0) {
-                if (elevated) {
-                    commandBuilder.append(",");
-                } else {
-                    commandBuilder.append(" -ArgumentList ");
-                }
-                commandBuilder.append(String.join(",", arguments));
+                sb.append(",");
+                final String joinedArgs = String.join(",", arguments);
+                sb.append(joinedArgs.replace("-", "`-"));
             }
-            if (selectProperty != null) {
-                commandBuilder.append(" | select -ExpandProperty ");
-                commandBuilder.append(selectProperty);
+            sb.append(",`-ErrorAction,Stop");
+            commands.add(sb.toString());
+        } else {
+            commands.add(command);
+            if (arguments.length > 0) {
+                commands.add(String.join(" ", arguments));
             }
-            final String fullCommand = commandBuilder.toString();
-            m_logger.queueDebug("Executing PowerShell command");
-            m_logger.queueDebug(fullCommand);
+        }
+        commands.add("-ErrorAction");
+        commands.add("Stop");
+        if (selectProperty != null) {
+            commands.add("|");
+            commands.add("select");
+            commands.add("-ExpandProperty");
+            commands.add(selectProperty);
+        }
+        m_logger.queueDebug("Executing PowerShell command");
+        m_logger.queueDebug(String.join(" ", commands));
 
-            // TODO: consider using a ProcessBuilder
-            final Process process = Runtime.getRuntime().exec(fullCommand);
+        return executePowerShellCommand(commands);
+    }
 
-            try (final InputStream stdoutStream = process.getInputStream();
-                    final InputStream stderrStream = process.getErrorStream()) {
-                // TODO: consider using some default library like org.apache.commons.io.IOUtils#readLines
-            	final StreamGobbler stdoutGobbler = new StreamGobbler(stdoutStream);
-            	final StreamGobbler stderrGobbler = new StreamGobbler(stderrStream);
+    private Optional<List<String>> executePowerShellCommand(final List<String> commands) {
 
-                final ExecutorService executor = Executors.newFixedThreadPool(2);
-                executor.submit(stdoutGobbler);
-                executor.submit(stderrGobbler);
-                executor.shutdown();
+        final String command = String.join(" ", commands);
 
-                final boolean timeout = !process.waitFor(COMMAND_TIMEOUT, TimeUnit.SECONDS);
-                final List<String> stdout = stdoutGobbler.getOutput();
-                final List<String> stderr = stderrGobbler.getOutput();
-                if (timeout) {
-                    m_logger.queueError(String.format("PowerShell command %s timed out.", command));
-                } else if (process.exitValue() == 0) {
-                    return Optional.of(stdoutGobbler.getOutput());
-                } else {
-                    m_logger
-                        .queueError(String.format("PowerShell command %s did not terminate successfully.", command));
-                }
-                if (!stdout.isEmpty()) {
-                    m_logger.queueDebug("Stdout is:");
-                    stdout.stream().forEach(m_logger::queueDebug);
-                }
-                if (!stderr.isEmpty()) {
-                    m_logger.queueError("Stderr is:");
-                    stderr.stream().forEach(m_logger::queueError);
-                }
-            }
+        final Process process;
+        try {
+            process = (new ProcessBuilder(commands)).start();
         } catch (IOException e) {
             m_logger.queueError(String.format("I/O error occured while executing PowerShell command %s.", command), e);
+            return Optional.empty();
+        }
+
+        final List<String> stdoutRef = new ArrayList<>();
+        final List<String> stderrRef = new ArrayList<>();
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+        executor.submit(
+            () -> new BufferedReader(new InputStreamReader(process.getInputStream())).lines().forEach(stdoutRef::add));
+        executor.submit(
+            () -> new BufferedReader(new InputStreamReader(process.getErrorStream())).lines().forEach(stderrRef::add));
+        executor.shutdown();
+
+        try {
+            if (!process.waitFor(COMMAND_TIMEOUT, TimeUnit.SECONDS)) {
+                m_logger.queueError(String.format("PowerShell command %s timed out.", command));
+                process.destroyForcibly().waitFor();
+            }
         } catch (InterruptedException e) {
             m_logger.queueError(
                 String.format("Thread was interrupted while waiting for PowerShell command %s.", command), e);
             // interrupt thread, as otherwise the information that the thread was interrupted would be lost
             Thread.currentThread().interrupt();
+            return Optional.empty();
         }
-        return Optional.empty();
-    }
 
+        if (process.exitValue() == 0) {
+            return Optional.of(stdoutRef);
+        } else {
+            m_logger.queueError(String.format("PowerShell command %s did not terminate successfully.", command));
+            final List<String> stdout = stdoutRef;
+            final List<String> stderr = stderrRef;
+            if (!stdout.isEmpty()) {
+                m_logger.queueError("Stdout is:");
+                stdout.stream().forEach(m_logger::queueDebug);
+            }
+            if (!stderr.isEmpty()) {
+                m_logger.queueError("Stderr is:");
+                stderr.stream().forEach(m_logger::queueError);
+            }
+            return Optional.empty();
+        }
+    }
 }

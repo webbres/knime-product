@@ -48,11 +48,6 @@
  */
 package org.knime.product.rcp.startup;
 
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.jface.dialogs.IDialogConstants;
 import org.eclipse.jface.dialogs.MessageDialog;
@@ -69,21 +64,25 @@ public final class LongStartupHandler {
 
     private static final class LongStartupDetectedDialog extends MessageDialogWithToggleAndURL {
 
-        private static final String TITLE = "Accelerate Startup of KNIME Analytics Platform";
+        private static final String TITLE = "Startup of KNIME Analytics Platform is taking long";
+
+        private static final String SUMMARY = String.format("Startup of KNIME Analytics Platform is taking "
+            + "longer than %d seconds, potentially due to an antivirus tool.", STARTUP_TIME_THRESHOLD_MILLIS / 1000);
+
+        private static final String TEXT =
+            "Antivirus tools are known to substantially slow down the startup of KNIME Analytics Platform. "
+                + "If you are using an antivirus tool and only installing extensions from trusted sources, "
+                + "consider registering KNIME Analytics Platform as a trusted application.";
 
         private static final String URL = "https://www.knime.com/faq#q38";
 
-        private static final String MESSAGE =
-            String.format("Startup of KNIME Analytics Platform is taking longer than %d seconds. ",
-                STARTUP_TIME_THRESHOLD_SECONDS)
-                + "\n\nAntivirus tools are known to substantially slow down the startup of KNIME Analytics Platform. "
-                + "If you are using an antivirus tool and you are only installing extensions from trusted sources, "
-                + "consider registering KNIME Analytics Platform as a trusted application. "
-                + String.format("See <a href=\"%s\">our FAQ</a> for more details.", URL);
+        private static final String LINK = "See <a href=\"" + URL + "\">our FAQ</a> for more details.";
+
+        private static final String TOGGLE_MESSAGE = "Do not show again";
 
         LongStartupDetectedDialog(final Display display, final DelayedMessageLogger logger) {
-            super(display, TITLE, URL, MESSAGE, logger, MessageDialog.INFORMATION,
-                new String[]{IDialogConstants.OK_LABEL});
+            super(display, logger, MessageDialog.INFORMATION, new String[]{IDialogConstants.OK_LABEL}, TITLE, SUMMARY,
+                TEXT, LINK, URL, TOGGLE_MESSAGE);
         }
     }
 
@@ -98,14 +97,16 @@ public final class LongStartupHandler {
     private static final LongStartupHandler INSTANCE = new LongStartupHandler();
 
     /** The amount of time (in seconds) after which startup is considered to have taken overly long. */
-    private static final long STARTUP_TIME_THRESHOLD_SECONDS = 60;
+    private static final int STARTUP_TIME_THRESHOLD_MILLIS = 90_000;
 
     private final DelayedMessageLogger m_logger = new DelayedMessageLogger();
 
     /** The time at which the application was started. */
     private long m_timestampOnStartup;
 
-    private Future<?> m_future;
+    private boolean m_showWarn = false;
+
+    private volatile boolean m_startupConcluded = false;
 
     private LongStartupHandler() {
         // singleton
@@ -126,24 +127,22 @@ public final class LongStartupHandler {
         final ConfigAreaFlag flag = new ConfigAreaFlag(configKey, m_logger);
 
         // check if we should even show the dialog
-        // check if we are on Windows 10
+        // check if we are on Windows
         // look up the Eclipse configuration area to determine if we should even check for Windows Defender
         if (showDialogAndWarn && Platform.OS_WIN32.equals(Platform.getOS()) && !flag.isFlagSet()) {
-
-            final ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
-
-            m_future = executor.schedule(() -> display.asyncExec(() -> {
-                final LongStartupDetectedDialog dialog = new LongStartupDetectedDialog(display, m_logger);
-                long timestampOnOpen = System.currentTimeMillis();
-                dialog.open();
-                // while waiting fot the dialog to close, we should not log startup time
-                m_timestampOnStartup += System.currentTimeMillis() - timestampOnOpen;
-                if (dialog.getToggleState()) {
-                    flag.setFlag(false);
+            m_showWarn = true;
+            display.timerExec(STARTUP_TIME_THRESHOLD_MILLIS, () -> {
+                if (!m_startupConcluded) {
+                    final LongStartupDetectedDialog dialog = new LongStartupDetectedDialog(display, m_logger);
+                    long timestampOnOpen = System.currentTimeMillis();
+                    dialog.open();
+                    // while waiting for the dialog to close, we should not log startup time
+                    m_timestampOnStartup += System.currentTimeMillis() - timestampOnOpen;
+                    if (dialog.getToggleState()) {
+                        flag.setFlag(false);
+                    }
                 }
-            }), STARTUP_TIME_THRESHOLD_SECONDS, TimeUnit.SECONDS);
-
-            executor.shutdown();
+            });
         }
     }
 
@@ -151,16 +150,14 @@ public final class LongStartupHandler {
      * Method that should be invoked once startup concluded.
      */
     public void onStartupConcluded() {
-        if (m_future != null) {
-            m_future.cancel(false);
-        }
+        m_startupConcluded = true;
 
         final NodeLogger logger = NodeLogger.getLogger(LongStartupHandler.class);
         m_logger.logQueuedMessaged(logger);
-        final long startupTime = (System.currentTimeMillis() - m_timestampOnStartup) / 1000;
+        final long startupTime = (System.currentTimeMillis() - m_timestampOnStartup);
         final String startupTimeMsg = String.format("Startup took %d seconds.", startupTime);
 
-        if (startupTime >= STARTUP_TIME_THRESHOLD_SECONDS && m_future != null) {
+        if (m_showWarn && startupTime >= STARTUP_TIME_THRESHOLD_MILLIS) {
             logger.warn(startupTimeMsg);
         } else {
             logger.debug(startupTimeMsg);
